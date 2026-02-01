@@ -1,16 +1,16 @@
 """
 Precious Peach NFT Tracker Bot
-Monitora gli acquisti della collezione Precious Peaches su TON
+Monitorizza gli acquisti della collezione Precious Peaches su TON
 e invia notifiche in tempo reale nel gruppo Telegram.
+
+Usa TON Center (toncenter.com) come API — funziona senza chiave (1 req/s).
 
 Richiede:
   - TELEGRAM_BOT_TOKEN   : token del bot da @BotFather
-  - TONAPI_KEY           : chiave API da https://tonconsole.com  (free tier va bene)
   - TELEGRAM_GROUP_ID    : (OPZIONALE) se non lo metti, il bot lo recupera da solo
 """
 
 import os
-import time
 import asyncio
 import logging
 from datetime import datetime, timezone
@@ -22,16 +22,15 @@ from telegram.error import TelegramError
 # ─── CONFIGURAZIONE ──────────────────────────────────────────────────────────
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_GROUP_ID  = int(os.environ["TELEGRAM_GROUP_ID"]) if os.environ.get("TELEGRAM_GROUP_ID") else None
-TONAPI_KEY         = os.environ["TONAPI_KEY"]
 
-# Indirizzo della collezione Precious Peaches su TON
-COLLECTION_ADDRESS = "EQA4i58iuS9DUYRtUZ97sZo5mnkbiYUBpWXQOe3dEUCcP1W8"
+# Indirizzo della collezione Precious Peaches su TON (formato UQ)
+COLLECTION_ADDRESS = "UQA4i58iuS9DUYRtUZ97sZo5mnkbiYUBpWXQOe3dEUCcP1W8"
 
-# Intervallo di polling in secondi (ogni 10s controlla nuovi eventi)
-POLL_INTERVAL = 10
+# Intervallo di polling in secondi
+POLL_INTERVAL = 12
 
-# File locale dove salvare l'ultimo timestamp dei eventi già processati
-STATE_FILE = "last_lt.txt"          # "lt" = logical time di TON
+# File locale dove salvare l'ultimo lt processato
+STATE_FILE = "last_lt.txt"
 
 # ─── LOGGING ─────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -44,12 +43,6 @@ log = logging.getLogger(__name__)
 
 # ─── AUTO-DETECT dell'ID del gruppo ─────────────────────────────────────────
 async def detect_group_id(bot: Bot) -> int:
-    """
-    Chiama getUpdates per recuperare i messaggi recenti ricevuti dal bot.
-    Cerca il primo chat di tipo 'supergroup' o 'group' e restituisce l'ID.
-    Funziona anche con gruppi privati, purché il bot sia amministratore
-    e qualcuno abbia scritto almeno un messaggio dopo l'aggiunta del bot.
-    """
     updates = await bot.get_updates(timeout=5)
     for update in updates:
         chat = None
@@ -57,22 +50,18 @@ async def detect_group_id(bot: Bot) -> int:
             chat = update.message.chat
         elif update.my_chat_member:
             chat = update.my_chat_member.chat
-
         if chat and chat.type in ("supergroup", "group"):
             log.info(f"Gruppo trovato automaticamente: {chat.title} (ID: {chat.id})")
             return chat.id
 
     raise RuntimeError(
-        "Nessun gruppo trovato. Assicurati che:\n"
-        "  1. Il bot sia amministratore del gruppo.\n"
-        "  2. Qualcuno abbia scritto almeno un messaggio nel gruppo dopo l'aggiunta del bot.\n"
-        "  Oppure imposta manualmente TELEGRAM_GROUP_ID nelle env variables."
+        "Nessun gruppo trovato. Assicurati che il bot sia amministratore "
+        "e che qualcuno abbia scritto nel gruppo, oppure imposta TELEGRAM_GROUP_ID."
     )
 
 
-# ─── STATO PERSISTENTE (ultimo lt processato) ───────────────────────────────
+# ─── STATO PERSISTENTE ───────────────────────────────────────────────────────
 def load_last_lt() -> int:
-    """Carica l'ultimo lt (logical time) processato dal file di stato."""
     try:
         with open(STATE_FILE, "r") as f:
             return int(f.read().strip())
@@ -81,130 +70,118 @@ def load_last_lt() -> int:
 
 
 def save_last_lt(lt: int) -> None:
-    """Salva l'ultimo lt processato."""
     with open(STATE_FILE, "w") as f:
         f.write(str(lt))
 
 
-# ─── TONAPI – recupero eventi della collezione ─────────────────────────────
-TONAPI_BASE = "https://api.tonapi.io/v2"
-
-HEADERS = {
-    "Authorization": f"Bearer {TONAPI_KEY}",
-    "Accept": "application/json",
-}
+# ─── TON CENTER – recupero transazioni ──────────────────────────────────────
+TONCENTER_BASE = "https://toncenter.com/api/v2"
 
 
-async def fetch_collection_events(before_lt: int | None = None, limit: int = 20) -> list[dict]:
+async def fetch_transactions(address: str, limit: int = 20, to_lt: int = 0) -> list[dict]:
     """
-    Chiama GET /v2/accounts/{account_id}/events
-    che restituisce gli eventi alto-livello (inclusi NFT Purchase) per il contratto collezione.
-
-    `before_lt` filtra eventi con lt < valore dato (paginazione verso il passato).
-    Per ottenere i più RECENTI, non mettiamo before_lt la prima volta.
+    Recupera le transazioni più recenti per un indirizzo.
+    to_lt=0 significa "dalle più recenti".
     """
-    url = f"{TONAPI_BASE}/accounts/{COLLECTION_ADDRESS}/events"
-    params: dict = {"limit": limit}
-    if before_lt:
-        params["before_lt"] = before_lt
-
+    url = f"{TONCENTER_BASE}/getTransactions"
+    params = {
+        "address": address,
+        "limit": limit,
+        "to_lt": to_lt,
+        "archival": False,
+    }
     async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.get(url, headers=HEADERS, params=params)
+        resp = await client.get(url, params=params)
         resp.raise_for_status()
-        return resp.json().get("events", [])
+        data = resp.json()
+        if not data.get("ok"):
+            log.error(f"TON Center errore: {data.get('error', 'sconosciuto')}")
+            return []
+        return data.get("result", [])
 
 
-async def fetch_nft_item(nft_address: str) -> dict:
-    """Recupera i dettagli di un singolo NFT item."""
-    url = f"{TONAPI_BASE}/nfts/{nft_address}"
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.get(url, headers=HEADERS)
-        resp.raise_for_status()
-        return resp.json()
-
-
-# ─── PARSING degli eventi per trovare gli acquisti NFT ──────────────────────
-def extract_nft_purchases(events: list[dict]) -> list[dict]:
+async def fetch_nft_data(nft_address: str) -> dict | None:
     """
-    Dentro ogni evento cercano le azioni di tipo 'NftPurchase'.
-    Ogni azione contiene: nft (indirizzo), buyer, seller, amount, price.
-    Restituisce una lista di acquisti con i campi rilevanti.
+    Recupera i dati di un NFT item usando getNftData.
+    Restituisce il dict con init, index, collection_address, owner_address, individual_data.
+    """
+    url = f"{TONCENTER_BASE}/getNftData"
+    params = {"address": nft_address}
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(url, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+            if data.get("ok"):
+                return data.get("result")
+    except Exception as e:
+        log.warning(f"Errore recupero NFT data: {e}")
+    return None
+
+
+# ─── PARSING delle transazioni per trovare gli acquisti NFT ─────────────────
+def parse_nft_purchases(transactions: list[dict]) -> list[dict]:
+    """
+    Cerca le transazioni dove:
+    - Il messaggio in ingresso viene da un indirizzo esterno (il buyer)
+    - Contiene un valore TON > 0 (il pagamento)
+    - C'è almeno un messaggio in uscita verso un indirizzo diverso dalla collezione
+      (il trasferimento dell'NFT item al nuovo owner)
     """
     purchases = []
-    for event in events:
-        lt      = event.get("lt", 0)
-        ts      = event.get("timestamp", 0)
-        actions = event.get("actions", [])
 
-        for action in actions:
-            if action.get("type") != "NftPurchase":
-                continue
+    for tx in transactions:
+        lt = tx.get("lt", 0)
+        utime = tx.get("utime", 0)
+        in_msg = tx.get("in_msg", {})
+        out_messages = tx.get("out_messages", [])
 
-            details = action.get("details", {})
-            nft_info = details.get("nft", {})
-            nft_addr = nft_info.get("address", "")
+        # Il buyer è la sorgente del messaggio in ingresso
+        buyer = in_msg.get("source", "")
+        price_nanoton = int(in_msg.get("value", "0"))
 
-            # Verifica che l'NFT appartenga alla nostra collezione
-            collection = nft_info.get("collection", {})
-            if collection.get("address", "") != COLLECTION_ADDRESS:
-                continue
+        # Se non c'è un valore o una sorgente, non è un acquisto
+        if price_nanoton == 0 or not buyer:
+            continue
 
-            buyer_addr  = details.get("buyer", {}).get("address", "unknown")
-            seller_addr = details.get("seller", {}).get("address", "unknown")
-            amount      = details.get("amount", {})
-            price_value = amount.get("value", "0")          # in nanoTON (stringa)
-            price_token = amount.get("token_name", "TON")
-
-            # Conversione da nanoTON a TON
-            try:
-                price_ton = int(price_value) / 1_000_000_000
-            except (ValueError, TypeError):
-                price_ton = 0.0
-
-            purchases.append({
-                "lt":           lt,
-                "timestamp":    ts,
-                "nft_address":  nft_addr,
-                "nft_name":     nft_info.get("name", ""),
-                "buyer":        buyer_addr,
-                "seller":       seller_addr,
-                "price_ton":    price_ton,
-                "price_token":  price_token,
-                "event_hash":   event.get("event_id", ""),
-            })
+        # Cerca nei messaggi in uscita il trasferimento verso l'NFT item
+        for out_msg in out_messages:
+            dest = out_msg.get("destination", "")
+            if dest and dest != COLLECTION_ADDRESS and dest != buyer:
+                purchases.append({
+                    "lt": lt,
+                    "timestamp": utime,
+                    "nft_address": dest,
+                    "buyer": buyer,
+                    "price_nanoton": price_nanoton,
+                })
+                break  # un solo acquisto per transazione
 
     return purchases
 
 
 # ─── FORMATTAZIONE del messaggio Telegram ───────────────────────────────────
-def format_purchase_message(purchase: dict, nft_details: dict | None = None) -> str:
-    """Costruisce il messaggio formattato per il gruppo."""
+def format_purchase_message(purchase: dict, nft_name: str = "Precious Peach") -> str:
     ts = purchase["timestamp"]
     time_str = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
 
-    # Nome dell'NFT: prova a usare i dettagli recuperati separatamente
-    nft_name = purchase["nft_name"] or "Precious Peach"
-    if nft_details:
-        nft_name = nft_details.get("name", nft_name) or nft_name
+    price_ton = purchase["price_nanoton"] / 1_000_000_000
 
-    # Link all'NFT su getgems
-    nft_link = f"https://getgems.io/nft/{purchase['nft_address']}"
+    nft_addr = purchase["nft_address"]
+    buyer_addr = purchase["buyer"]
 
-    # Link buyer/seller su tonviewer
-    buyer_link  = f"https://tonviewer.com/{purchase['buyer']}"
-    seller_link = f"https://tonviewer.com/{purchase['seller']}"
+    nft_link   = f"https://getgems.io/nft/{nft_addr}"
+    buyer_link = f"https://tonviewer.com/{buyer_addr}"
 
-    # Abbrevia gli indiririzzi per leggibilità
-    buyer_short  = purchase["buyer"][:6] + "…" + purchase["buyer"][-4:]  if len(purchase["buyer"]) > 12 else purchase["buyer"]
-    seller_short = purchase["seller"][:6] + "…" + purchase["seller"][-4:] if len(purchase["seller"]) > 12 else purchase["seller"]
+    def shorten(addr: str) -> str:
+        return addr[:6] + "…" + addr[-4:] if len(addr) > 12 else addr
 
     msg = (
         f"🍑 *Precious Peach acquistata!*\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"🏷️ *NFT:* [{nft_name}]({nft_link})\n"
-        f"💰 *Prezzo:* {purchase['price_ton']:.4f} {purchase['price_token']}\n"
-        f"🛒 *Compratore:* [{buyer_short}]({buyer_link})\n"
-        f"🏪 *Venditore:* [{seller_short}]({seller_link})\n"
+        f"💰 *Prezzo:* {price_ton:.4f} TON\n"
+        f"🛒 *Compratore:* [{shorten(buyer_addr)}]({buyer_link})\n"
         f"🕐 *Orario:* {time_str}\n"
         f"━━━━━━━━━━━━━━━━━━━━"
     )
@@ -213,7 +190,6 @@ def format_purchase_message(purchase: dict, nft_details: dict | None = None) -> 
 
 # ─── INVIO messaggio nel gruppo ──────────────────────────────────────────────
 async def send_to_group(bot: Bot, text: str) -> None:
-    """Invia un messaggio nel gruppo con formattazione Markdown."""
     try:
         await bot.send_message(
             chat_id=TELEGRAM_GROUP_ID,
@@ -227,63 +203,59 @@ async def send_to_group(bot: Bot, text: str) -> None:
 
 # ─── LOOP PRINCIPALE ─────────────────────────────────────────────────────────
 async def polling_loop(bot: Bot) -> None:
-    """
-    Loop principale che ogni POLL_INTERVAL secondi:
-    1. Recupera gli ultimi eventi della collezione.
-    2. Filtra gli acquisti NFT nuovi (lt > ultimo lt salvato).
-    3. Per ogni acquisto, recupera dettagli NFT e invia notifica.
-    """
     last_lt = load_last_lt()
     log.info(f"Bot avviato. Ultimo lt processato: {last_lt}")
 
-    # Prima esecuzione: se last_lt è 0, recupera i primi eventi per calibrare
-    # senza inviare notifiche (evita spam al primo avvio)
+    # Prima esecuzione: calibra senza inviare notifiche
     if last_lt == 0:
         log.info("Prima esecuzione – calibrazione senza notifiche…")
-        events = await fetch_collection_events(limit=5)
-        if events:
-            max_lt = max(e.get("lt", 0) for e in events)
+        transactions = await fetch_transactions(COLLECTION_ADDRESS, limit=5)
+        if transactions:
+            max_lt = max(tx.get("lt", 0) for tx in transactions)
             save_last_lt(max_lt)
             last_lt = max_lt
             log.info(f"Calibrazione completata. lt iniziale: {last_lt}")
 
     while True:
         try:
-            events = await fetch_collection_events(limit=50)
+            transactions = await fetch_transactions(COLLECTION_ADDRESS, limit=30)
 
-            # Filtra solo eventi più recenti di last_lt
-            new_events = [e for e in events if e.get("lt", 0) > last_lt]
+            # Filtra solo transazioni più recenti del nostro last_lt
+            new_txs = [tx for tx in transactions if tx.get("lt", 0) > last_lt]
 
-            if new_events:
-                # Ordina per lt crescente (dal più vecchio al più recente)
-                new_events.sort(key=lambda e: e["lt"])
+            if new_txs:
+                new_txs.sort(key=lambda tx: tx["lt"])
 
-                purchases = extract_nft_purchases(new_events)
+                purchases = parse_nft_purchases(new_txs)
 
                 for purchase in purchases:
-                    # Recupera dettagli aggiuntivi dell'NFT
-                    nft_details = None
-                    try:
-                        nft_details = await fetch_nft_item(purchase["nft_address"])
-                    except Exception as e:
-                        log.warning(f"Non ho potuto recuperare dettagli NFT: {e}")
+                    # Prova a recuperare il numero dell'NFT
+                    nft_name = "Precious Peach"
+                    nft_data = await fetch_nft_data(purchase["nft_address"])
+                    if nft_data:
+                        idx = nft_data.get("index")
+                        if idx is not None:
+                            nft_name = f"Precious Peach #{idx}"
 
-                    msg = format_purchase_message(purchase, nft_details)
-                    log.info(f"Nuovo acquisto rilevato – NFT: {purchase['nft_address']}, Prezzo: {purchase['price_ton']} TON")
+                    msg = format_purchase_message(purchase, nft_name)
+                    log.info(
+                        f"Nuovo acquisto – NFT: {purchase['nft_address']}, "
+                        f"Prezzo: {purchase['price_nanoton'] / 1e9:.4f} TON"
+                    )
                     await send_to_group(bot, msg)
 
-                # Aggiorna last_lt con il massimo degli eventi processati
-                max_lt = max(e.get("lt", 0) for e in new_events)
+                # Aggiorna last_lt
+                max_lt = max(tx.get("lt", 0) for tx in new_txs)
                 save_last_lt(max_lt)
                 last_lt = max_lt
                 log.info(f"lt aggiornato a: {last_lt}")
             else:
-                log.debug("Nessun nuovo evento.")
+                log.debug("Nessuna nuova transazione.")
 
         except httpx.HTTPStatusError as e:
-            log.error(f"Errore HTTP da TonAPI: {e.response.status_code} – {e.response.text[:200]}")
+            log.error(f"Errore HTTP TON Center: {e.response.status_code} – {e.response.text[:200]}")
         except Exception as e:
-            log.error(f"Errore nel loop di polling: {e}")
+            log.error(f"Errore nel loop: {e}")
 
         await asyncio.sleep(POLL_INTERVAL)
 
@@ -293,11 +265,9 @@ async def main() -> None:
     global TELEGRAM_GROUP_ID
 
     bot = Bot(token=TELEGRAM_BOT_TOKEN)
-    # Verifica che il bot sia valido
     me = await bot.get_me()
     log.info(f"Bot connesso come: {me.first_name} (@{me.username})")
 
-    # Se l'ID del gruppo non è stato impostato manualmente, recuperalo da solo
     if TELEGRAM_GROUP_ID is None:
         log.info("TELEGRAM_GROUP_ID non impostato — ricerca automatica…")
         TELEGRAM_GROUP_ID = await detect_group_id(bot)
