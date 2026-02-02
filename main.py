@@ -183,12 +183,12 @@ def format_purchase_message(purchase: dict, nft_name: str = "Precious Peach") ->
         return addr[:6] + "…" + addr[-4:] if len(addr) > 12 else addr
 
     msg = (
-        f"🍑 *Precious Peach acquistata!*\n"
+        f"🍑 *Precious Peach Purchased!*\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"🏷️ *NFT:* [{nft_name}]({nft_link})\n"
-        f"💰 *Prezzo:* {price_ton:.4f} TON\n"
-        f"🛒 *Compratore:* [{shorten(buyer_addr)}]({buyer_link})\n"
-        f"🕐 *Orario:* {time_str}\n"
+        f"💰 *Price:* {price_ton:.4f} TON\n"
+        f"🛒 *Buyer:* [{shorten(buyer_addr)}]({buyer_link})\n"
+        f"🕐 *Time:* {time_str}\n"
         f"━━━━━━━━━━━━━━━━━━━━"
     )
     return msg
