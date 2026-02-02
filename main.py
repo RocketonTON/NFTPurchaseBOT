@@ -19,8 +19,7 @@ from typing import List, Dict, Optional
 from datetime import datetime, timezone
 import httpx
 from dotenv import load_dotenv
-from telegram import Bot, Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram import Bot
 from telegram.error import TelegramError
 
 # --- GLOBAL CONSTANTS ---
@@ -209,19 +208,28 @@ async def send_to_group(bot: Bot, text: str) -> None:
         log.error(f"Error sending Telegram message: {e}")
 
 
-# ─── /test COMMAND ───────────────────────────────────────────────────────────
-async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Sends a test message when someone writes /test in the group."""
-    fake_purchase = {
-        "timestamp": int(datetime.now(timezone.utc).timestamp()),
-        "nft_address": "EQA4i58iuS9DUYRtUZ97sZo5mnkbiYUBpWXQOe3dEUCcP1W8",
-        "buyer": "EQD9XcPkrT1qJ3HXz5vnKbiYUBpWXQOe3dEUCcaB3f",
-        "price_nanoton": 85_000_000_000,  # 85 TON
-    }
-    
-    msg = format_purchase_message(fake_purchase, "Precious Peach #42 (TEST)")
-    await update.message.reply_text(msg, parse_mode="Markdown")
-    log.info(f"/test command executed by {update.effective_user.first_name}")
+# ─── CHECK FOR /test COMMAND ─────────────────────────────────────────────────
+async def check_for_commands(bot: Bot) -> None:
+    """Checks for /test command in group messages."""
+    try:
+        updates = await bot.get_updates(offset=-1, timeout=1)
+        for update in updates:
+            if update.message and update.message.text == "/test":
+                fake_purchase = {
+                    "timestamp": int(datetime.now(timezone.utc).timestamp()),
+                    "nft_address": "EQA4i58iuS9DUYRtUZ97sZo5mnkbiYUBpWXQOe3dEUCcP1W8",
+                    "buyer": "EQD9XcPkrT1qJ3HXz5vnKbiYUBpWXQOe3dEUCcaB3f",
+                    "price_nanoton": 85_000_000_000,
+                }
+                msg = format_purchase_message(fake_purchase, "Precious Peach #42 (TEST)")
+                await bot.send_message(
+                    chat_id=update.message.chat.id,
+                    text=msg,
+                    parse_mode="Markdown"
+                )
+                log.info(f"/test command executed by {update.message.from_user.first_name}")
+    except Exception as e:
+        pass  # Silently ignore command check errors
 
 
 # ─── PROCESS SINGLE TRANSACTION ──────────────────────────────────────────────
@@ -292,6 +300,9 @@ async def polling_loop(bot: Bot):
     # Main loop
     while True:
         try:
+            # Check for /test command
+            await check_for_commands(bot)
+            
             # Use to_lt only if > 0
             to_lt_param = last_processed_lt if last_processed_lt > 0 else None
             
@@ -333,10 +344,7 @@ async def polling_loop(bot: Bot):
 async def main() -> None:
     global TELEGRAM_GROUP_ID
 
-    # Create Application to handle commands
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    bot = app.bot
-
+    bot = Bot(token=TELEGRAM_BOT_TOKEN)
     me = await bot.get_me()
     log.info(f"Bot connected as: {me.first_name} (@{me.username})")
 
@@ -345,16 +353,6 @@ async def main() -> None:
         TELEGRAM_GROUP_ID = await detect_group_id(bot)
 
     log.info(f"Target group ID: {TELEGRAM_GROUP_ID}")
-
-    # Add /test command
-    app.add_handler(CommandHandler("test", test_command))
-
-    # Start Application in background
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling()
-
-    # Start NFT monitoring loop
     await polling_loop(bot)
 
 
