@@ -21,6 +21,9 @@ from dotenv import load_dotenv
 from telegram import Bot
 from telegram.error import TelegramError
 
+# --- COSTANTI GLOBALI ---
+TONCENTER_API = "https://toncenter.com/api/v2"
+
 # ─── CONFIGURAZIONE ──────────────────────────────────────────────────────────
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_GROUP_ID  = int(os.environ["TELEGRAM_GROUP_ID"]) if os.environ.get("TELEGRAM_GROUP_ID") else None
