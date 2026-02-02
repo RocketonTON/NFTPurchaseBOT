@@ -77,8 +77,7 @@ def save_last_lt(lt: int) -> None:
 
 
 # ─── TON CENTER – recupero transazioni ──────────────────────────────────────
-TONCENTER_BASE = "https://toncenter.com/api/v2"
-
+TONCENTER_API = "https://toncenter.com/api/v2"
 
 async def fetch_transactions(address: str, limit: int = 100, to_lt: int = None) -> list:
     """
