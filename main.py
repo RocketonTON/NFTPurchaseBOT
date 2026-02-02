@@ -10,12 +10,14 @@ Richiede:
   - TELEGRAM_GROUP_ID    : (OPZIONALE) se non lo metti, il bot lo recupera da solo
 """
 
-import os
 import asyncio
 import logging
-from datetime import datetime, timezone
-
+import os
+import json
+import time
+from typing import List, Dict, Optional
 import httpx
+from dotenv import load_dotenv
 from telegram import Bot
 from telegram.error import TelegramError
 
@@ -78,7 +80,7 @@ def save_last_lt(lt: int) -> None:
 TONCENTER_BASE = "https://toncenter.com/api/v2"
 
 
-async def fetch_transactions(address: str, limit: int = 100, to_lt: int = None) -> List[Dict]:
+async def fetch_transactions(address: str, limit: int = 100, to_lt: int = None) -> list:
     """
     Recupera le transazioni per un indirizzo TON.
     """
