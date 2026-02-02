@@ -24,7 +24,7 @@ TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_GROUP_ID  = int(os.environ["TELEGRAM_GROUP_ID"]) if os.environ.get("TELEGRAM_GROUP_ID") else None
 
 # Indirizzo della collezione Precious Peaches su TON (formato UQ)
-COLLECTION_ADDRESS = "UQA4i58iuS9DUYRtUZ97sZo5mnkbiYUBpWXQOe3dEUCcP1W8"
+COLLECTION_ADDRESS = "EQA4i58iuS9DUYRtUZ97sZo5mnkbiYUBpWXQOe3dEUCcP1W8"
 
 # Intervallo di polling in secondi
 POLL_INTERVAL = 12
@@ -78,26 +78,28 @@ def save_last_lt(lt: int) -> None:
 TONCENTER_BASE = "https://toncenter.com/api/v2"
 
 
-async def fetch_transactions(address: str, limit: int = 20, to_lt: int = 0) -> list[dict]:
+async def fetch_transactions(address: str, limit: int = 100, to_lt: int = None) -> List[Dict]:
     """
-    Recupera le transazioni più recenti per un indirizzo.
-    to_lt=0 significa "dalle più recenti".
+    Recupera le transazioni per un indirizzo TON.
     """
-    url = f"{TONCENTER_BASE}/getTransactions"
-    params = {
-        "address": address,
-        "limit": limit,
-        "to_lt": to_lt,
-        "archival": False,
-    }
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.get(url, params=params)
-        resp.raise_for_status()
-        data = resp.json()
-        if not data.get("ok"):
-            log.error(f"TON Center errore: {data.get('error', 'sconosciuto')}")
-            return []
-        return data.get("result", [])
+    try:
+        params = {
+            "address": address,
+            "limit": limit,
+            "archival": "false"
+        }
+        if to_lt:
+            params["to_lt"] = to_lt
+        
+        url = f"{TONCENTER_API}/getTransactions"
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(url, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("result", [])
+    except Exception as e:
+        logging.error(f"Errore nel fetch delle transazioni per {address}: {e}")
+        return []
 
 
 async def fetch_nft_data(nft_address: str) -> dict | None:
@@ -202,63 +204,87 @@ async def send_to_group(bot: Bot, text: str) -> None:
 
 
 # ─── LOOP PRINCIPALE ─────────────────────────────────────────────────────────
-async def polling_loop(bot: Bot) -> None:
-    last_lt = load_last_lt()
-    log.info(f"Bot avviato. Ultimo lt processato: {last_lt}")
-
-    # Prima esecuzione: calibra senza inviare notifiche
-    if last_lt == 0:
-        log.info("Prima esecuzione – calibrazione senza notifiche…")
-        transactions = await fetch_transactions(COLLECTION_ADDRESS, limit=5)
-        if transactions:
-            max_lt = max(tx.get("lt", 0) for tx in transactions)
-            save_last_lt(max_lt)
-            last_lt = max_lt
-            log.info(f"Calibrazione completata. lt iniziale: {last_lt}")
-
+async def polling_loop(bot: Bot):
+    """Loop principale di polling delle transazioni."""
+    last_processed_lt = load_last_lt()
+    
+    # PRIMA ESECUZIONE: calibrazione
+    if last_processed_lt == 0:
+        logging.info("🎯 Prima esecuzione - calibrazione iniziale...")
+        
+        try:
+            # Prima chiamata SENZA to_lt per ottenere le transazioni più recenti
+            transactions = await fetch_transactions(COLLECTION_ADDRESS, limit=10, to_lt=None)
+            
+            if transactions:
+                # Trova l'ultimo LT (Logical Time)
+                lts = []
+                for tx in transactions:
+                    tx_id = tx.get("transaction_id", {})
+                    lt = tx_id.get("lt")
+                    if lt:
+                        lts.append(int(lt))
+                
+                if lts:
+                    last_processed_lt = max(lts)
+                    save_last_lt(last_processed_lt)
+                    logging.info(f"✅ Calibrazione completata. Ultimo LT: {last_processed_lt}")
+                    
+                    # NON inviare notifiche per le transazioni vecchie
+                    logging.info("⏭️  Saltate notifiche per transazioni esistenti")
+                else:
+                    logging.warning("⚠️  Nessun LT trovato nelle transazioni")
+                    last_processed_lt = int(time.time() * 1000)  # Fallback a timestamp corrente
+            else:
+                logging.info("📭 Nessuna transazione trovata per la collezione")
+                last_processed_lt = int(time.time() * 1000)
+                
+        except Exception as e:
+            logging.error(f"❌ Errore durante la calibrazione: {e}")
+            last_processed_lt = int(time.time() * 1000)
+            save_last_lt(last_processed_lt)
+    
+    logging.info(f"🚀 Polling avviato. Ultimo LT processato: {last_processed_lt}")
+    
+    # Loop principale
     while True:
         try:
-            transactions = await fetch_transactions(COLLECTION_ADDRESS, limit=30)
-
-            # Filtra solo transazioni più recenti del nostro last_lt
-            new_txs = [tx for tx in transactions if tx.get("lt", 0) > last_lt]
-
-            if new_txs:
-                new_txs.sort(key=lambda tx: tx["lt"])
-
-                purchases = parse_nft_purchases(new_txs)
-
-                for purchase in purchases:
-                    # Prova a recuperare il numero dell'NFT
-                    nft_name = "Precious Peach"
-                    nft_data = await fetch_nft_data(purchase["nft_address"])
-                    if nft_data:
-                        idx = nft_data.get("index")
-                        if idx is not None:
-                            nft_name = f"Precious Peach #{idx}"
-
-                    msg = format_purchase_message(purchase, nft_name)
-                    log.info(
-                        f"Nuovo acquisto – NFT: {purchase['nft_address']}, "
-                        f"Prezzo: {purchase['price_nanoton'] / 1e9:.4f} TON"
-                    )
-                    await send_to_group(bot, msg)
-
-                # Aggiorna last_lt
-                max_lt = max(tx.get("lt", 0) for tx in new_txs)
-                save_last_lt(max_lt)
-                last_lt = max_lt
-                log.info(f"lt aggiornato a: {last_lt}")
-            else:
-                log.debug("Nessuna nuova transazione.")
-
-        except httpx.HTTPStatusError as e:
-            log.error(f"Errore HTTP TON Center: {e.response.status_code} – {e.response.text[:200]}")
+            # Usa to_lt solo se > 0
+            to_lt_param = last_processed_lt if last_processed_lt > 0 else None
+            
+            transactions = await fetch_transactions(
+                COLLECTION_ADDRESS, 
+                limit=100, 
+                to_lt=to_lt_param
+            )
+            
+            if transactions:
+                # Ordina per LT crescente (dal più vecchio al più nuovo)
+                transactions.sort(key=lambda x: int(x.get("transaction_id", {}).get("lt", 0)))
+                
+                new_last_lt = last_processed_lt
+                
+                for tx in transactions:
+                    tx_id = tx.get("transaction_id", {})
+                    current_lt = int(tx_id.get("lt", 0))
+                    
+                    # Processa solo transazioni NUOVE
+                    if current_lt > last_processed_lt:
+                        await process_transaction(tx, bot)
+                        new_last_lt = max(new_last_lt, current_lt)
+                
+                # Aggiorna l'ultimo LT processato
+                if new_last_lt > last_processed_lt:
+                    last_processed_lt = new_last_lt
+                    save_last_lt(last_processed_lt)
+                    logging.info(f"📈 Aggiornato ultimo LT a: {last_processed_lt}")
+            
+            # Attesa prima del prossimo poll
+            await asyncio.sleep(POLL_INTERVAL)
+            
         except Exception as e:
-            log.error(f"Errore nel loop: {e}")
-
-        await asyncio.sleep(POLL_INTERVAL)
-
+            logging.error(f"❌ Errore nel polling loop: {e}")
+            await asyncio.sleep(10)  # Breve pausa in caso di errore
 
 # ─── ENTRY POINT ─────────────────────────────────────────────────────────────
 async def main() -> None:
