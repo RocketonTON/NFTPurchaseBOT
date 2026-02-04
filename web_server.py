@@ -8,6 +8,18 @@ Questo file:
   3. Lancia il polling loop del bot in background.
 """
 
+
+import sys
+import types
+
+# Monkey patch per imghdr su Python 3.13
+if sys.version_info >= (3, 13):
+    sys.modules['imghdr'] = types.ModuleType('imghdr')
+    # Aggiungi funzioni base se necessario
+    imghdr_module = sys.modules['imghdr']
+    imghdr_module.what = lambda *args, **kwargs: None
+    imghdr_module.test = lambda *args, **kwargs: None
+
 import os
 import asyncio
 import logging
