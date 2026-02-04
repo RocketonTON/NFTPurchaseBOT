@@ -1,6 +1,6 @@
 """
-Precious Peach NFT Tracker Bot
-Monitors purchases of Precious Peaches collection on TON
+Precious Peach NFT Tracker Bot - SIMPLE VERSION
+Monitors purchases and handles commands separately
 """
 
 import asyncio
@@ -9,8 +9,8 @@ import os
 import time
 from datetime import datetime, timezone
 import httpx
-from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram import Bot, Update
+from telegram.ext import Updater, CommandHandler, CallbackContext
 from telegram.error import TelegramError
 
 # --- CONFIGURATION ---
@@ -27,11 +27,9 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# Global variables
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_GROUP_ID = os.getenv("TELEGRAM_GROUP_ID")
-if TELEGRAM_GROUP_ID:
-    TELEGRAM_GROUP_ID = int(TELEGRAM_GROUP_ID)
+# Global bot instance
+bot = None
+TELEGRAM_GROUP_ID = None
 
 # ─── PERSISTENT STATE ──────────────────────────────────────────────────────
 def load_last_lt() -> int:
@@ -93,7 +91,7 @@ def parse_nft_purchases(transactions: list[dict]) -> list[dict]:
     
     return purchases
 
-async def process_transaction(tx: dict, bot: Bot) -> None:
+async def process_transaction(tx: dict):
     purchases = parse_nft_purchases([tx])
     
     for purchase in purchases:
@@ -127,11 +125,11 @@ async def process_transaction(tx: dict, bot: Bot) -> None:
                 disable_web_page_preview=True
             )
             log.info(f"✅ Notification sent for purchase")
-        except TelegramError as e:
+        except Exception as e:
             log.error(f"❌ Telegram error: {e}")
 
-# ─── POLLING LOOP (NON TOCCARE - GIA FUNZIONA) ─────────────────────────────
-async def polling_loop(bot: Bot):
+# ─── POLLING LOOP ──────────────────────────────────────────────────────────
+async def polling_loop():
     last_processed_lt = load_last_lt()
     
     # Initial calibration
@@ -173,7 +171,7 @@ async def polling_loop(bot: Bot):
                 for tx in transactions:
                     current_lt = int(tx.get("transaction_id", {}).get("lt", 0))
                     if current_lt > last_processed_lt:
-                        await process_transaction(tx, bot)
+                        await process_transaction(tx)
                         new_last_lt = max(new_last_lt, current_lt)
                 
                 if new_last_lt > last_processed_lt:
@@ -187,36 +185,10 @@ async def polling_loop(bot: Bot):
             log.error(f"❌ Polling error: {e}")
             await asyncio.sleep(10)
 
-# ─── TELEGRAM COMMANDS (NUOVA SEZIONE) ─────────────────────────────────────
-async def send_test_notification(chat_id: int, bot: Bot):
-    """Send a test notification to specified chat"""
-    test_message = (
-        "🧪 *TEST NOTIFICATION - Precious Peach Purchased!*\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "🏷️ *NFT:* [Precious Peach #9999](https://getgems.io/test)\n"
-        "💰 *Price:* 99.9999 TON\n"
-        "🛒 *Buyer:* [EQBv4f...W3c7d](https://tonviewer.com/test)\n"
-        "🕐 *Time:* Now (Test)\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "#Test #PreciousPeaches"
-    )
-    
-    try:
-        await bot.send_message(
-            chat_id=chat_id,
-            text=test_message,
-            parse_mode="Markdown",
-            disable_web_page_preview=True
-        )
-        log.info(f"✅ Test notification sent to chat {chat_id}")
-        return True
-    except Exception as e:
-        log.error(f"❌ Error sending test: {e}")
-        return False
-
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ─── TELEGRAM COMMANDS ─────────────────────────────────────────────────────
+def start_command(update: Update, context: CallbackContext):
     """Handle /start command"""
-    await update.message.reply_text(
+    update.message.reply_text(
         "🍑 *Precious Peaches Purchase Bot*\n\n"
         "I monitor NFT purchases and send notifications automatically.\n\n"
         "Commands:\n"
@@ -225,79 +197,70 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
-async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def test_command(update: Update, context: CallbackContext):
     """Handle /test command"""
-    chat_type = update.message.chat.type
-    
-    if chat_type == "private":
-        # In private chat: show buttons
-        keyboard = [
-            [
-                InlineKeyboardButton("📢 Send to GROUP", callback_data="test_group"),
-                InlineKeyboardButton("💬 Send HERE", callback_data="test_here")
-            ]
-        ]
-        await update.message.reply_text(
-            "Where should I send the test notification?",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    else:
-        # Already in a group: send here
-        await update.message.reply_text("Sending test to this group...")
-        success = await send_test_notification(update.message.chat.id, context.bot)
-        if success:
-            await update.message.reply_text("✅ Test sent!")
-        else:
-            await update.message.reply_text("❌ Failed to send test.")
+    update.message.reply_text(
+        "🧪 *Test Notification*\n\n"
+        "The bot is working! Real notifications are sent automatically when someone buys a Precious Peach NFT.",
+        parse_mode="Markdown"
+    )
 
-async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def status_command(update: Update, context: CallbackContext):
     """Handle /status command"""
     last_lt = load_last_lt()
     status_msg = (
         f"🤖 *Bot Status*\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"✅ Running on Render\n"
+        f"✅ Running\n"
         f"🔄 Polling every {POLL_INTERVAL}s\n"
         f"🎯 Collection: `{COLLECTION_ADDRESS[:20]}...`\n"
         f"📊 Group ID: {TELEGRAM_GROUP_ID}\n"
         f"⏱️ Last LT: {last_lt}\n"
         f"━━━━━━━━━━━━━━━━━━━━"
     )
-    await update.message.reply_text(status_msg, parse_mode="Markdown")
-
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle button clicks"""
-    query = update.callback_query
-    await query.answer()
-    
-    if query.data == "test_group":
-        await query.edit_message_text("Sending test to notification group...")
-        success = await send_test_notification(TELEGRAM_GROUP_ID, context.bot)
-        if success:
-            await query.edit_message_text("✅ Test sent to group!")
-        else:
-            await query.edit_message_text("❌ Failed to send to group.")
-    
-    elif query.data == "test_here":
-        await query.edit_message_text("Sending test here...")
-        success = await send_test_notification(query.message.chat.id, context.bot)
-        if success:
-            await query.edit_message_text("✅ Test sent here!")
-        else:
-            await query.edit_message_text("❌ Failed to send test.")
+    update.message.reply_text(status_msg, parse_mode="Markdown")
 
 # ─── MAIN FUNCTION ─────────────────────────────────────────────────────────
+def start_commands():
+    """Start Telegram command handler in a separate thread"""
+    from threading import Thread
+    
+    def run_commands():
+        """Run command handler"""
+        TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+        updater = Updater(TOKEN, use_context=True)
+        
+        # Add command handlers
+        dp = updater.dispatcher
+        dp.add_handler(CommandHandler("start", start_command))
+        dp.add_handler(CommandHandler("test", test_command))
+        dp.add_handler(CommandHandler("status", status_command))
+        
+        log.info("🤖 Telegram commands handler started")
+        updater.start_polling()
+        updater.idle()
+    
+    # Start in background thread
+    thread = Thread(target=run_commands, daemon=True)
+    thread.start()
+
 async def main():
     """Main async entry point"""
-    global TELEGRAM_GROUP_ID
+    global bot, TELEGRAM_GROUP_ID
     
-    # Initialize bot for notifications
-    bot = Bot(token=TELEGRAM_BOT_TOKEN)
+    # Initialize bot
+    TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+    bot = Bot(token=TOKEN)
+    
     me = await bot.get_me()
     log.info(f"Bot connected: {me.first_name} (@{me.username})")
     
-    # Auto-detect group if needed
-    if not TELEGRAM_GROUP_ID:
+    # Get group ID
+    TELEGRAM_GROUP_ID = os.getenv("TELEGRAM_GROUP_ID")
+    if TELEGRAM_GROUP_ID:
+        TELEGRAM_GROUP_ID = int(TELEGRAM_GROUP_ID)
+    else:
+        # Auto-detect
         log.info("Auto-detecting group...")
         try:
             updates = await bot.get_updates(timeout=5)
@@ -323,21 +286,11 @@ async def main():
     except Exception as e:
         log.warning(f"Could not send startup message: {e}")
     
-    # Initialize Telegram application for commands
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    # Start command handler in background
+    start_commands()
     
-    # Add command handlers
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("test", test_command))
-    application.add_handler(CommandHandler("status", status_command))
-    application.add_handler(CallbackQueryHandler(button_handler))
-    
-    # Start both tasks in parallel
-    polling_task = asyncio.create_task(polling_loop(bot))
-    commands_task = asyncio.create_task(application.run_polling())
-    
-    # Wait for both (they run forever)
-    await asyncio.gather(polling_task, commands_task)
+    # Start polling loop
+    await polling_loop()
 
 if __name__ == "__main__":
     asyncio.run(main())
