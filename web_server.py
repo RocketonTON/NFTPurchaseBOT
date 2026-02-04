@@ -50,12 +50,13 @@ def run_http_server():
 # ─── Self-ping per evitare il sleep di Render ───────────────────────────────
 async def self_ping_loop():
     """Ogni 10 minuti invia un GET a se stesso per restare sveglio."""
+    import urllib.request
     while True:
         await asyncio.sleep(600)  # 10 minuti
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.get(RENDER_URL)
-                log.info(f"Self-ping: {resp.status_code}")
+            req = urllib.request.Request(RENDER_URL)
+            response = urllib.request.urlopen(req, timeout=10)
+            log.info(f"Self-ping: {response.status}")
         except Exception as e:
             log.warning(f"Self-ping fallito: {e}")
 
