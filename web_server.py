@@ -70,6 +70,7 @@ async def main():
     asyncio.create_task(self_ping_loop())
 
     # 3. Avvia il bot (importa e lancia il polling loop)
+    # CAMBIA QUESTA RIGA:
     from main import main as bot_main
     await bot_main()
 
