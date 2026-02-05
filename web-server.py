@@ -1,9 +1,59 @@
 """
-web_server.py – Wrapper for Render.com
+web_server.py – Wrapper for Render.com with DEBUG
 """
 
+import os
 import sys
+import time
 import types
+
+# === DEBUG: Find where we are ===
+print("=== RENDER DEBUG INFO ===")
+print(f"Python version: {sys.version}")
+print(f"Current dir: {os.getcwd()}")
+print(f"Script path: {__file__}")
+print(f"Files here: {os.listdir('.')}")
+
+# Check common locations
+paths_to_check = [
+    '.',
+    '/opt/render/project',
+    '/opt/render/project/src', 
+    '/app',
+    '/var/task'
+]
+
+for path in paths_to_check:
+    if os.path.exists(path):
+        print(f"\n📁 Checking {path}:")
+        try:
+            files = os.listdir(path)
+            print(f"   Files: {files[:10]}...")  # First 10 files
+            if 'web_server.py' in files:
+                print(f"   ✅ FOUND web_server.py!")
+            if 'main.py' in files:
+                print(f"   ✅ FOUND main.py!")
+        except:
+            print(f"   ❌ Cannot access")
+
+# Look for web_server.py everywhere
+print("\n🔍 Searching for web_server.py...")
+for root, dirs, files in os.walk('/opt/render'):
+    if 'web_server.py' in files:
+        print(f"✅ Found at: {os.path.join(root, 'web_server.py')}")
+        break
+else:
+    print("❌ Not found in /opt/render")
+
+print("==========================\n")
+time.sleep(2)  # Give time to read logs
+
+# Now continue with normal imports
+import asyncio
+import logging
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from threading import Thread
+import urllib.request
 
 # Monkey patch for imghdr in Python 3.13
 if sys.version_info >= (3, 13):
