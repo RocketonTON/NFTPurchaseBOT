@@ -137,6 +137,32 @@ async def fetch_transactions(address: str, limit: int = 100, to_lt: int = None) 
         log.error(f"🌐 API V3 error: {e}")
         return []
 
+def reset_state_if_outdated(api_transactions: list, current_last_lt: int) -> int:
+    """
+    Controlla se il last_lt salvato è troppo alto rispetto ai dati ricevuti.
+    Se sì, resetta automaticamente alla transazione più recente disponibile.
+    """
+    if not api_transactions:
+        return current_last_lt
+    
+    # Trova il LT più alto nelle transazioni ricevute dall'API
+    latest_api_lt = max(int(tx.get("transaction_id", {}).get("lt", 0)) for tx in api_transactions)
+    
+    # Se il nostro last_lt è troppo più alto (es. > 1000 LT oltre il massimo dell'API)
+    # probabilmente è uno stato corrotto e va resettato
+    if current_last_lt > latest_api_lt and (current_last_lt - latest_api_lt) > 1000:
+        log.warning(f"⚠️ Stato corroretto rilevato!")
+        log.warning(f"   last_lt salvato: {current_last_lt}")
+        log.warning(f"   Ultimo LT disponibile dall'API: {latest_api_lt}")
+        log.warning(f"   Differenza: {current_last_lt - latest_api_lt} LT")
+        log.warning(f"   ⚙️ Auto-resettando last_lt a {latest_api_lt}")
+        
+        # Resetta al massimo disponibile
+        save_last_lt(latest_api_lt)
+        return latest_api_lt
+    
+    return current_last_lt
+
 # ─── NFT PURCHASE PARSING ─────────────────────────────────────────────────
 def parse_nft_purchases(transactions: list[dict]) -> list[dict]:
     """
@@ -392,6 +418,9 @@ async def nft_polling_loop(bot: Bot, group_id: int):
             # Fetch transactions from API
             log.debug(f"📡 Requesting transactions for collection: {COLLECTION_ADDRESS[:20]}...")
             transactions = await fetch_transactions(COLLECTION_ADDRESS, limit=30, to_lt=None)
+
+            if transactions:
+                last_lt = reset_state_if_outdated(transactions, last_lt)
             
             if not transactions:
                 log.debug("📭 API returned no transactions")
