@@ -415,14 +415,14 @@ async def nft_polling_loop(bot: Bot, group_id: int):
             
             log.debug(f"🔄 NFT Check #{check_counter}")
             
-            # Fetch transactions from API
+                        # Fetch transactions from API
             log.debug(f"📡 Requesting transactions for collection: {COLLECTION_ADDRESS[:20]}...")
             transactions = await fetch_transactions(COLLECTION_ADDRESS, limit=30, to_lt=None)
 
             if transactions:
                 last_lt = reset_state_if_outdated(transactions, last_lt)
             
-                        if not transactions:
+            if not transactions:
                 log.info(f"📭 Polling #{check_counter}: API returned NO transactions")
                 log.debug("ℹ️ This could mean: 1) No recent transactions, 2) API issue, 3) Wrong address")
                 await asyncio.sleep(POLL_INTERVAL)
