@@ -12,7 +12,7 @@ import httpx
 from telegram import Bot
 
 # --- CONFIGURATION ---
-TONCENTER_API = "https://toncenter.com/api/v2"
+TONCENTER_API = "https://toncenter.com/api/v3"
 COLLECTION_ADDRESS = "EQA4i58iuS9DUYRtUZ97sZo5mnkbiYUBpWXQOe3dEUCcP1W8"
 POLL_INTERVAL = 15
 COMMAND_CHECK_INTERVAL = 2
@@ -102,33 +102,39 @@ def save_last_update_id(update_id: int) -> None:
 
 # ─── TON CENTER API ────────────────────────────────────────────────────────
 async def fetch_transactions(address: str, limit: int = 100, to_lt: int = None) -> list:
-    """Fetch transactions from TON Center API with debug logging"""
+    """Fetch transactions from TON Center API v3 with debug logging"""
     try:
+        # Costruisci l'URL per l'API V3
+        url = f"{TONCENTER_API}/transactions"
+        
+        # Parametri per l'API V3 (account invece di address, niente più archival)
         params = {
-            "address": address,
-            "limit": limit,
-            "archival": "false"
+            "account": address,  # <-- PARAMETRO CAMBIATO: account invece di address
+            "limit": limit
         }
         if to_lt and to_lt > 0:
-            params["to_lt"] = to_lt
-            log.debug(f"🌐 API Request with to_lt: {to_lt}")
+            params["before_lt"] = to_lt  # <-- PARAMETRO OPZIONALE CAMBIATO: before_lt invece di to_lt
+            log.debug(f"🌐 API V3 Request with before_lt: {to_lt}")
         else:
-            log.debug(f"🌐 API Request (latest transactions)")
+            log.debug(f"🌐 API V3 Request (latest transactions)")
         
-        log.debug(f"🌐 Requesting {limit} transactions for address: {address[:20]}...")
+        log.debug(f"🌐 Requesting {limit} transactions for account: {address[:20]}...")
         
-        url = f"{TONCENTER_API}/getTransactions"
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.get(url, params=params)
             resp.raise_for_status()
-            data = resp.json().get("result", [])
-            log.debug(f"🌐 API Response: {len(data)} transactions received")
-            return data
+            data = resp.json()
+            
+            # L'API V3 restituisce le transazioni in una chiave "transactions"
+            transactions = data.get("transactions", [])
+            log.debug(f"🌐 API V3 Response: {len(transactions)} transactions received")
+            return transactions
+            
     except httpx.RequestError as e:
         log.error(f"🌐 Network error fetching transactions: {e}")
         return []
     except Exception as e:
-        log.error(f"🌐 API error: {e}")
+        log.error(f"🌐 API V3 error: {e}")
         return []
 
 # ─── NFT PURCHASE PARSING ─────────────────────────────────────────────────
