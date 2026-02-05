@@ -20,8 +20,8 @@ COMMAND_CHECK_INTERVAL = 2  # 2 seconds for commands! 🚀
 STATE_FILE = "last_lt.txt"
 UPDATE_ID_FILE = "last_update_id.txt"
 
-TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-TELEGRAM_GROUP_ID = int(os.environ["TELEGRAM_GROUP_ID"]) if os.environ.get("TELEGRAM_GROUP_ID") else None
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_GROUP_ID = os.environ.get("TELEGRAM_GROUP_ID")
 
 # Setup logging
 logging.basicConfig(
