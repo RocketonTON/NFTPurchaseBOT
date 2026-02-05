@@ -422,13 +422,25 @@ async def nft_polling_loop(bot: Bot, group_id: int):
             if transactions:
                 last_lt = reset_state_if_outdated(transactions, last_lt)
             
-            if not transactions:
-                log.debug("📭 API returned no transactions")
+                        if not transactions:
+                log.info(f"📭 Polling #{check_counter}: API returned NO transactions")
                 log.debug("ℹ️ This could mean: 1) No recent transactions, 2) API issue, 3) Wrong address")
                 await asyncio.sleep(POLL_INTERVAL)
                 continue
             
-            log.info(f"📥 Received {len(transactions)} transaction(s) from API")
+            # ✅ NUOVO LOG: Conferma che sta leggendo le transazioni
+            log.info(f"📥 Polling #{check_counter}: Reading {len(transactions)} transaction(s) from API")
+            
+            # Log aggiuntivo: mostra gli indirizzi coinvolti
+            if len(transactions) > 0:
+                tx_sources = set()
+                for tx in transactions[:3]:  # Prime 3 transazioni
+                    in_msg = tx.get("in_msg", {})
+                    if in_msg and in_msg.get("source"):
+                        tx_sources.add(in_msg.get("source")[:8] + "...")
+                
+                if tx_sources:
+                    log.info(f"   👥 Involved addresses: {', '.join(list(tx_sources)[:3])}")
             
             # Sort transactions by LT (Logical Time)
             transactions.sort(key=lambda x: int(x.get("transaction_id", {}).get("lt", 0)))
